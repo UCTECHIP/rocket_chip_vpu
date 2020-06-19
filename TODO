@@ -1,0 +1,12 @@
+update VPU to riscv-v-spec 1.0 version
+deal with vsetvl[i] insts in CSR module instead of VCSR module
+improve VPU's architecture and preformance
+improve testharness
+XLen must be binding on XLEN parameter
+FLen must be binding on FLEN parameter
+realize dot and fdot insts
+improve Zvediv extension implementation
+update to match Rocket's FPU which supports Half-precision
+update MulDiv module
+VReduction module support until 1024 width element
+mix VScalarMove VSlide VRGather VCompress modules, using addressing like model to implement instead
