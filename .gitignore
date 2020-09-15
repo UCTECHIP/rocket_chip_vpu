@@ -1,0 +1,8 @@
+vpu/project/target
+vpu/project/project
+vpu/target
+vpu/hardfloat
+vpu/berkeley-hardfloat
+vpu/generated_verilog
+vpu/test_run_dir
+
