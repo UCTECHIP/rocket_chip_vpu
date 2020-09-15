@@ -70,7 +70,7 @@ install riscv-gnu-toolchain
 ### make verilog
 first copy vpu folder to rocket-chip
 ```
-  $ cp vpu /path/to/clone/rocket-chip
+  $ cp -R vpu /path/to/clone/rocket-chip
 ```
 
 then make verilog
