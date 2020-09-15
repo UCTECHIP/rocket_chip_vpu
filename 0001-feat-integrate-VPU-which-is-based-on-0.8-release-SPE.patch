@@ -1,29 +1,29 @@
-From b68b54144bf1d7de91f84e3fa3a2debc26997ac3 Mon Sep 17 00:00:00 2001
+From c082597fa778343bdb2f8834abc9de835d9d270a Mon Sep 17 00:00:00 2001
 From: liangzhanhao <549830592@qq.com>
-Date: Fri, 19 Jun 2020 15:23:09 +0800
-Subject: [PATCH] integrate VPU which is corresponding to 0.8-release SPEC
+Date: Mon, 14 Sep 2020 19:11:34 +0800
+Subject: [PATCH] feat: integrate VPU which is based on 0.8-release SPEC
 
 ---
  build.sbt                                  |   6 +
- src/main/scala/rocket/CSR.scala            | 235 ++++++++----
- src/main/scala/rocket/IDecode.scala        | 568 ++++++++++++++++++-----------
- src/main/scala/rocket/Instructions.scala   | 139 +++++++
- src/main/scala/rocket/RocketCore.scala     |  78 +++-
- src/main/scala/subsystem/Configs.scala     |  57 +++
- src/main/scala/system/Configs.scala        |   5 +
+ src/main/scala/rocket/CSR.scala            | 237 ++++++---
+ src/main/scala/rocket/IDecode.scala        | 568 +++++++++++++--------
+ src/main/scala/rocket/Instructions.scala   | 139 +++++
+ src/main/scala/rocket/RocketCore.scala     |  78 ++-
+ src/main/scala/subsystem/Configs.scala     |  63 +++
+ src/main/scala/system/Configs.scala        |   9 +-
  src/main/scala/tile/BaseTile.scala         |   6 +-
  src/main/scala/tile/Core.scala             |   8 +
- src/main/scala/tile/FPU.scala              |  16 +
+ src/main/scala/tile/FPU.scala              |  31 ++
  src/main/scala/tile/RocketTile.scala       |  24 +-
- src/main/scala/vpuwrapper/VPUWrapper.scala |  53 +++
- 12 files changed, 900 insertions(+), 295 deletions(-)
+ src/main/scala/vpuwrapper/VPUWrapper.scala |  53 ++
+ 12 files changed, 927 insertions(+), 295 deletions(-)
  create mode 100644 src/main/scala/vpuwrapper/VPUWrapper.scala
 
 diff --git a/build.sbt b/build.sbt
-index dc20498..7fbba05 100644
+index 3433aeed7..21fc23ded 100644
 --- a/build.sbt
 +++ b/build.sbt
-@@ -72,10 +72,14 @@ lazy val hardfloat  = dependOnChisel(project).settings(commonSettings)
+@@ -83,10 +83,14 @@ lazy val hardfloat  = dependOnChisel(project).settings(commonSettings)
    .settings(publishArtifact := false)
  lazy val `rocket-macros` = (project in file("macros")).settings(commonSettings)
    .settings(publishArtifact := false)
@@ -38,7 +38,7 @@ index dc20498..7fbba05 100644
    .dependsOn(`rocket-macros` % "compile-internal;test-internal")
    .settings(
        aggregate := false,
-@@ -84,6 +88,8 @@ lazy val rocketchip = dependOnChisel(project in file("."))
+@@ -95,6 +99,8 @@ lazy val rocketchip = dependOnChisel(project in file("."))
        mappings in (Compile, packageSrc) ++= (mappings in (`api-config-chipsalliance`, Compile, packageSrc)).value,
        mappings in (Compile, packageBin) ++= (mappings in (hardfloat, Compile, packageBin)).value,
        mappings in (Compile, packageSrc) ++= (mappings in (hardfloat, Compile, packageSrc)).value,
@@ -48,7 +48,7 @@ index dc20498..7fbba05 100644
        mappings in (Compile, packageSrc) ++= (mappings in (`rocket-macros`, Compile, packageSrc)).value,
        exportJars := true
 diff --git a/src/main/scala/rocket/CSR.scala b/src/main/scala/rocket/CSR.scala
-index 8bb954a..23fa35a 100644
+index 0cf3d0d2b..fa175e896 100644
 --- a/src/main/scala/rocket/CSR.scala
 +++ b/src/main/scala/rocket/CSR.scala
 @@ -12,6 +12,7 @@ import freechips.rocketchip.util._
@@ -59,24 +59,29 @@ index 8bb954a..23fa35a 100644
  
  class MStatus extends Bundle {
    // not truly part of mstatus, but convenient
-@@ -28,6 +29,7 @@ class MStatus extends Bundle {
+@@ -27,7 +28,10 @@ class MStatus extends Bundle {
+   val sxl = UInt(width = 2)
    val uxl = UInt(width = 2)
    val sd_rv32 = Bool()
-   val zero1 = UInt(width = 8)
-+  val vs = UInt(width = 2) //add for VPU, 0.8-release SPEC
+-  val zero1 = UInt(width = 8)
++ // val zero1 = UInt(width = 8)
++  val zero1 = UInt(width = 5) //add for VPU, 0.8-release SPEC
++  val dcache_dis = Bool()     //add for VPU, 0.8-release SPEC
++  val vs = UInt(width = 2)    //add for VPU, 0.8-release SPEC
    val tsr = Bool()
    val tw = Bool()
    val tvm = Bool()
-@@ -37,7 +39,7 @@ class MStatus extends Bundle {
+@@ -37,7 +41,8 @@ class MStatus extends Bundle {
    val xs = UInt(width = 2)
    val fs = UInt(width = 2)
    val mpp = UInt(width = 2)
 -  val vs = UInt(width = 2)
 +//  val vs = UInt(width = 2)
++  val hpp = UInt(width = 2) //add for VPU
    val spp = UInt(width = 1)
    val mpie = Bool()
    val hpie = Bool()
-@@ -181,6 +183,7 @@ class CSRDecodeIO extends Bundle {
+@@ -181,6 +186,7 @@ class CSRDecodeIO extends Bundle {
    val fp_illegal = Bool(OUTPUT)
    val vector_illegal = Bool(OUTPUT)
    val fp_csr = Bool(OUTPUT)
@@ -84,7 +89,7 @@ index 8bb954a..23fa35a 100644
    val rocc_illegal = Bool(OUTPUT)
    val read_illegal = Bool(OUTPUT)
    val write_illegal = Bool(OUTPUT)
-@@ -218,6 +221,14 @@ class CSRFileIO(implicit p: Parameters) extends CoreBundle
+@@ -218,6 +224,14 @@ class CSRFileIO(implicit p: Parameters) extends CoreBundle
    val fcsr_rm = Bits(OUTPUT, FPConstants.RM_SZ)
    val fcsr_flags = Valid(Bits(width = FPConstants.FLAGS_SZ)).flip
    val set_fs_dirty = coreParams.haveFSDirty.option(Bool(INPUT))
@@ -99,7 +104,7 @@ index 8bb954a..23fa35a 100644
    val rocc_interrupt = Bool(INPUT)
    val interrupt = Bool(OUTPUT)
    val interrupt_cause = UInt(OUTPUT, xLen)
-@@ -394,10 +405,17 @@ class CSRFile(
+@@ -394,10 +408,17 @@ class CSRFile(
  
    val reg_fflags = Reg(UInt(width = 5))
    val reg_frm = Reg(UInt(width = 3))
@@ -121,7 +126,7 @@ index 8bb954a..23fa35a 100644
  
    val reg_instret = WideCounter(64, io.retire)
    val reg_cycle = if (enableCommitLog) reg_instret else withClock(io.ungated_clock) { WideCounter(64, !io.csr_stall) }
-@@ -433,7 +451,8 @@ class CSRFile(
+@@ -433,7 +454,8 @@ class CSRFile(
      (if (usingAtomics) "A" else "") +
      (if (fLen >= 32) "F" else "") +
      (if (fLen >= 64) "D" else "") +
@@ -131,36 +136,32 @@ index 8bb954a..23fa35a 100644
      (if (usingCompressed) "C" else "")
    val isaString = (if (coreParams.useRVE) "E" else "I") +
      isaMaskString +
-@@ -466,25 +485,47 @@ class CSRFile(
+@@ -466,23 +488,45 @@ class CSRFile(
      CSRs.dpc -> readEPC(reg_dpc).sextTo(xLen),
      CSRs.dscratch -> reg_dscratch.asUInt)
  
--  val read_fcsr = Cat(reg_frm, reg_fflags)
+-  val read_fcsr = Cat(reg_frm, reg_fflags) | (reg_vxsat.getOrElse(0.U) << 8) | (reg_vxrm.getOrElse(0.U) << 9)
 -  val fp_csrs = LinkedHashMap[Int,Bits]() ++
 -    usingFPU.option(CSRs.fflags -> reg_fflags) ++
 -    usingFPU.option(CSRs.frm -> reg_frm) ++
--    (usingFPU || usingVector).option(CSRs.fcsr -> read_fcsr)
+-    (usingFPU || usingVector).option(CSRs.fcsr -> read_fcsr) ++
+-    reg_vxsat.map(CSRs.vxsat -> _) ++
+-    reg_vxrm.map(CSRs.vxrm -> _)
 -
--  val read_vcsr = Cat(reg_vxrm.getOrElse(0.U), reg_vxsat.getOrElse(0.U))
 -  val vector_csrs = if (!usingVector) LinkedHashMap() else LinkedHashMap[Int,Bits](
--    CSRs.vxsat -> reg_vxsat.get,
--    CSRs.vxrm -> reg_vxrm.get,
--    CSRs.vcsr -> read_vcsr,
 -    CSRs.vstart -> reg_vstart.get,
 -    CSRs.vtype -> reg_vconfig.get.vtype.asUInt,
 -    CSRs.vl -> reg_vconfig.get.vl,
 -    CSRs.vlenb -> (vLen / 8).U)
-+//  val read_fcsr = Cat(reg_frm, reg_fflags)
++//  val read_fcsr = Cat(reg_frm, reg_fflags) | (reg_vxsat.getOrElse(0.U) << 8) | (reg_vxrm.getOrElse(0.U) << 9)
 +//  val fp_csrs = LinkedHashMap[Int,Bits]() ++
 +//    usingFPU.option(CSRs.fflags -> reg_fflags) ++
 +//    usingFPU.option(CSRs.frm -> reg_frm) ++
-+//    (usingFPU || usingVector).option(CSRs.fcsr -> read_fcsr)
-+
-+//  val read_vcsr = Cat(reg_vxrm.getOrElse(0.U), reg_vxsat.getOrElse(0.U))
++//    (usingFPU || usingVector).option(CSRs.fcsr -> read_fcsr) ++
++//    reg_vxsat.map(CSRs.vxsat -> _) ++
++//    reg_vxrm.map(CSRs.vxrm -> _)
++//
 +//  val vector_csrs = if (!usingVector) LinkedHashMap() else LinkedHashMap[Int,Bits](
-+//    CSRs.vxsat -> reg_vxsat.get,
-+//    CSRs.vxrm -> reg_vxrm.get,
-+//    CSRs.vcsr -> read_vcsr,
 +//    CSRs.vstart -> reg_vstart.get,
 +//    CSRs.vtype -> reg_vconfig.get.vtype.asUInt,
 +//    CSRs.vl -> reg_vconfig.get.vl,
@@ -173,12 +174,12 @@ index 8bb954a..23fa35a 100644
 +    CSRs.fcsr -> Cat(reg_vxrm, reg_vxsat, reg_frm, reg_fflags)) //vxrm, vxsat are mirrored in the upper bits of fcsr
 +
 +   val vp_csrs = LinkedHashMap[Int,Bits](
-+   CSRs.vstart -> reg_vstart,
-+   CSRs.vxsat  -> reg_vxsat,
-+   CSRs.vxrm   -> reg_vxrm,
-+   CSRs.vl     -> reg_vl,
-+   CSRs.vtype  -> reg_vtype,
-+   CSRs.vlenb  -> (VLEN/8).U)
++     CSRs.vstart -> reg_vstart,
++     CSRs.vxsat  -> reg_vxsat,
++     CSRs.vxrm   -> reg_vxrm,
++     CSRs.vl     -> reg_vl,
++     CSRs.vtype  -> reg_vtype,
++     CSRs.vlenb  -> (VLEN/8).U)
 +//add for VPU
  
    read_mapping ++= debug_csrs
@@ -196,11 +197,12 @@ index 8bb954a..23fa35a 100644
  
    if (coreParams.haveBasicCounters) {
      read_mapping += CSRs.mcycle -> reg_cycle
-@@ -603,13 +644,15 @@ class CSRFile(
+@@ -601,13 +645,16 @@ class CSRFile(
      io_dec.fp_illegal := io.status.fs === 0 || !reg_misa('f'-'a')
      io_dec.vector_illegal := io.status.vs === 0 || !reg_misa('v'-'a')
      io_dec.fp_csr := decodeFast(fp_csrs.keys.toList)
-+    io_dec.vp_csr := decodeFast(vp_csrs.keys.toList) //add for VPU
++//    io_dec.vp_csr := Bool(usingVPU) && DecodeLogic(io_dec.csr, vp_csrs.keys.toList.map(_.U), (read_mapping -- vp_csrs.keys.toList).keys.toList.map(_.U)) //add for VPU???
++    io_dec.vp_csr := decodeFast(vp_csrs.keys.toList)
      io_dec.rocc_illegal := io.status.xs === 0 || !reg_misa('x'-'a')
      io_dec.read_illegal := reg_mstatus.prv < io_dec.csr(9,8) ||
        !decodeAny(read_mapping) ||
@@ -213,7 +215,7 @@ index 8bb954a..23fa35a 100644
        io_dec.fp_csr && io_dec.fp_illegal
      io_dec.write_illegal := io_dec.csr(11,10).andR
      io_dec.write_flush := !(io_dec.csr >= CSRs.mscratch && io_dec.csr <= CSRs.mtval || io_dec.csr >= CSRs.sscratch && io_dec.csr <= CSRs.stval)
-@@ -764,13 +807,13 @@ class CSRFile(
+@@ -761,13 +808,13 @@ class CSRFile(
      }
    }})
  
@@ -234,18 +236,18 @@ index 8bb954a..23fa35a 100644
  
    val set_fs_dirty = Wire(init = io.set_fs_dirty.getOrElse(false.B))
    if (coreParams.haveFSDirty) {
-@@ -786,13 +829,34 @@ class CSRFile(
+@@ -783,13 +830,34 @@ class CSRFile(
      set_fs_dirty := true
    }
  
 -  io.vector.foreach { vio =>
 -    when (vio.set_vxsat) {
 -      reg_vxsat.get := true
--      set_vs_dirty := true
+-      set_fs_dirty := true
 +//  io.vector.foreach { vio =>
 +//    when (vio.set_vxsat) {
 +//      reg_vxsat.get := true
-+//      set_vs_dirty := true
++//      set_fs_dirty := true
 +//    }
 +//  }
 +
@@ -273,20 +275,20 @@ index 8bb954a..23fa35a 100644
    val csr_wen = io.rw.cmd.isOneOf(CSR.S, CSR.C, CSR.W)
    io.csrw_counter := Mux(coreParams.haveBasicCounters && csr_wen && (io.rw.addr.inRange(CSRs.mcycle, CSRs.mcycle + CSR.nCtr) || io.rw.addr.inRange(CSRs.mcycleh, CSRs.mcycleh + CSR.nCtr)), UIntToOH(io.rw.addr(log2Ceil(CSR.nCtr+nPerfCounters)-1, 0)), 0.U)
    when (csr_wen) {
-@@ -818,8 +882,10 @@ class CSRFile(
+@@ -813,8 +881,10 @@ class CSRFile(
          }
        }
  
--      if (usingSupervisor || usingFPU) reg_mstatus.fs := formFS(new_mstatus.fs)
+-      if (usingVM || usingFPU || usingVector) reg_mstatus.fs := formFS(new_mstatus.fs)
 -      reg_mstatus.vs := formVS(new_mstatus.vs)
-+//      if (usingSupervisor || usingFPU) reg_mstatus.fs := formFS(new_mstatus.fs)
++//      if (usingVM || usingFPU || usingVector) reg_mstatus.fs := formFS(new_mstatus.fs)
 +//      reg_mstatus.vs := formVS(new_mstatus.vs)
-+      if (usingSupervisor || usingFPU || usingVPU) reg_mstatus.fs := formFS(new_mstatus.fs) //add for VPU
-+      if (usingVPU) reg_mstatus.vs := formVS(new_mstatus.vs)                                //add for VPU
++      if (usingVM || usingFPU || usingVPU) reg_mstatus.fs := formFS(new_mstatus.fs) //add for VPU
++      if (usingVPU) reg_mstatus.vs := formVS(new_mstatus.vs)                        //add for VPU
        if (usingRoCC) reg_mstatus.xs := Fill(2, new_mstatus.xs.orR)
      }
      when (decoded_addr(CSRs.misa)) {
-@@ -860,15 +926,37 @@ class CSRFile(
+@@ -855,19 +925,41 @@ class CSRFile(
        writeCounter(CSRs.minstret, reg_instret, wdata)
      }
  
@@ -294,10 +296,14 @@ index 8bb954a..23fa35a 100644
 +//    if (usingFPU) {
 +//      when (decoded_addr(CSRs.fflags)) { set_fs_dirty := true; reg_fflags := wdata }
 +//      when (decoded_addr(CSRs.frm))    { set_fs_dirty := true; reg_frm := wdata }
++//    }
++//    if (usingFPU || usingVector) {
 +//      when (decoded_addr(CSRs.fcsr)) {
 +//        set_fs_dirty := true
 +//        reg_fflags := wdata
 +//        reg_frm := wdata >> reg_fflags.getWidth
++//        reg_vxsat.foreach(_ := wdata >> 8)
++//        reg_vxrm.foreach(_ := wdata >> 9)
 +//      }
 +//    }
 +
@@ -305,13 +311,18 @@ index 8bb954a..23fa35a 100644
 +    if (usingFPU && !usingVPU) {
        when (decoded_addr(CSRs.fflags)) { set_fs_dirty := true; reg_fflags := wdata }
        when (decoded_addr(CSRs.frm))    { set_fs_dirty := true; reg_frm := wdata }
+-    }
+-    if (usingFPU || usingVector) {
 -      when (decoded_addr(CSRs.fcsr)) {
 -        set_fs_dirty := true
 -        reg_fflags := wdata
 -        reg_frm := wdata >> reg_fflags.getWidth
+-        reg_vxsat.foreach(_ := wdata >> 8)
+-        reg_vxrm.foreach(_ := wdata >> 9)
 -      }
+-    }
 +      when (decoded_addr(CSRs.fcsr))   { set_fs_dirty := true; reg_fflags := wdata; reg_frm := wdata >> reg_fflags.getWidth }
-     }
++     }
 +
 +     if (usingVPU) {
 +      when (decoded_addr(CSRs.vxsat))  { set_fs_dirty := true; reg_vxsat  := wdata }
@@ -330,29 +341,19 @@ index 8bb954a..23fa35a 100644
      if (usingDebug) {
        when (decoded_addr(CSRs.dcsr)) {
          val new_dcsr = new DCSR().fromBits(wdata)
-@@ -967,37 +1055,37 @@ class CSRFile(
+@@ -962,32 +1054,32 @@ class CSRFile(
          io.wen := true
        }
      }
 -    if (usingVector) {
 -      when (decoded_addr(CSRs.vstart)) { set_vs_dirty := true; reg_vstart.get := wdata }
--      when (decoded_addr(CSRs.vxrm))   { set_vs_dirty := true; reg_vxrm.get := wdata }
--      when (decoded_addr(CSRs.vxsat))  { set_vs_dirty := true; reg_vxsat.get := wdata }
--      when (decoded_addr(CSRs.vcsr))   {
--        set_vs_dirty := true
--        reg_vxsat.get := wdata
--        reg_vxrm.get := wdata >> 1
--      }
+-      when (decoded_addr(CSRs.vxrm))   { set_fs_dirty := true; reg_vxrm.get := wdata }
+-      when (decoded_addr(CSRs.vxsat))  { set_fs_dirty := true; reg_vxsat.get := wdata }
 -    }
 +//    if (usingVector) {
 +//      when (decoded_addr(CSRs.vstart)) { set_vs_dirty := true; reg_vstart.get := wdata }
-+//      when (decoded_addr(CSRs.vxrm))   { set_vs_dirty := true; reg_vxrm.get := wdata }
-+//      when (decoded_addr(CSRs.vxsat))  { set_vs_dirty := true; reg_vxsat.get := wdata }
-+//      when (decoded_addr(CSRs.vcsr))   {
-+//        set_vs_dirty := true
-+//        reg_vxsat.get := wdata
-+//        reg_vxrm.get := wdata >> 1
-+//      }
++//      when (decoded_addr(CSRs.vxrm))   { set_fs_dirty := true; reg_vxrm.get := wdata }
++//      when (decoded_addr(CSRs.vxsat))  { set_fs_dirty := true; reg_vxsat.get := wdata }
 +//    }
    }
  
@@ -396,17 +397,17 @@ index 8bb954a..23fa35a 100644
 +//  }
  
    reg_satp.asid := 0
-   if (!usingVM) {
-@@ -1080,5 +1168,6 @@ class CSRFile(
+   if (nBreakpoints <= 1) reg_tselect := 0
+@@ -1067,5 +1159,6 @@ class CSRFile(
    def formTVec(x: UInt) = x andNot Mux(x(0), ((((BigInt(1) << mtvecInterruptAlign) - 1) << mtvecBaseAlign) | 2).U, 2)
    def isaStringToMask(s: String) = s.map(x => 1 << (x - 'A')).foldLeft(0)(_|_)
    def formFS(fs: UInt) = if (coreParams.haveFSDirty) fs else Fill(2, fs.orR)
 -  def formVS(vs: UInt) = if (usingVector) vs else 0.U
 +//  def formVS(vs: UInt) = if (usingVector) vs else 0.U
-+  def formVS(vs: UInt) = if (coreParams.haveVSDirty) vs else 0.U //add for VPU
++  def formVS(vs: UInt) = if (coreParams.haveVSDirty) vs else Fill(2, vs.orR) //add for VPU
  }
 diff --git a/src/main/scala/rocket/IDecode.scala b/src/main/scala/rocket/IDecode.scala
-index 04f83cd..3a4c777 100644
+index 94594aec2..2438ea07d 100644
 --- a/src/main/scala/rocket/IDecode.scala
 +++ b/src/main/scala/rocket/IDecode.scala
 @@ -46,23 +46,29 @@ class IntCtrlSigs extends Bundle {
@@ -563,7 +564,7 @@ index 04f83cd..3a4c777 100644
  }
  
  class CFlushDecode(supportsFlushLine: Boolean)(implicit val p: Parameters) extends DecodeConstants
-@@ -138,57 +144,57 @@ class CFlushDecode(supportsFlushLine: Boolean)(implicit val p: Parameters) exten
+@@ -138,52 +144,52 @@ class CFlushDecode(supportsFlushLine: Boolean)(implicit val p: Parameters) exten
  
    val table: Array[(BitPat, List[BitPat])] = Array(
      zapRs1(CFLUSH_D_L1)->
@@ -574,17 +575,12 @@ index 04f83cd..3a4c777 100644
 +                List(Y,N,N,N,N,N,N,Y,N,A2_ZERO,A1_RS1, IMM_X, DW_XPR,FN_ADD,   Y,M_FLUSH_ALL,N,N,N,N,N,N,N,CSR.I,N,N,N,N,N,N,N))
  }
  
- class SVMDecode(implicit val p: Parameters) extends DecodeConstants
- {
-   val table: Array[(BitPat, List[BitPat])] = Array(
--    SFENCE_VMA->List(Y,N,N,N,N,N,Y,Y,N,A2_ZERO,A1_RS1, IMM_X, DW_XPR,FN_ADD,   Y,M_SFENCE,   N,N,N,N,N,N,N,CSR.N,N,N,N,N))
-+    SFENCE_VMA->List(Y,N,N,N,N,N,Y,Y,N,A2_ZERO,A1_RS1, IMM_X, DW_XPR,FN_ADD,   Y,M_SFENCE,   N,N,N,N,N,N,N,CSR.N,N,N,N,N,N,N,N))
- }
- 
  class SDecode(implicit val p: Parameters) extends DecodeConstants
  {
    val table: Array[(BitPat, List[BitPat])] = Array(
+-    SFENCE_VMA->List(Y,N,N,N,N,N,Y,Y,N,A2_ZERO,A1_RS1, IMM_X, DW_XPR,FN_ADD,   Y,M_SFENCE,   N,N,N,N,N,N,N,CSR.N,N,N,N,N),
 -    SRET->      List(Y,N,N,N,N,N,N,X,N,A2_X,   A1_X,   IMM_X, DW_X,  FN_X,     N,M_X,        N,N,N,N,N,N,N,CSR.I,N,N,N,N))
++    SFENCE_VMA->List(Y,N,N,N,N,N,Y,Y,N,A2_ZERO,A1_RS1, IMM_X, DW_XPR,FN_ADD,   Y,M_SFENCE,   N,N,N,N,N,N,N,CSR.N,N,N,N,N,N,N,N),
 +    SRET->      List(Y,N,N,N,N,N,N,X,N,A2_X,   A1_X,   IMM_X, DW_X,  FN_X,     N,M_X,        N,N,N,N,N,N,N,CSR.I,N,N,N,N,N,N,N))
  }
  
@@ -646,7 +642,7 @@ index 04f83cd..3a4c777 100644
  }
  
  class MDecode(pipelinedMul: Boolean)(implicit val p: Parameters) extends DecodeConstants
-@@ -196,15 +202,15 @@ class MDecode(pipelinedMul: Boolean)(implicit val p: Parameters) extends DecodeC
+@@ -191,15 +197,15 @@ class MDecode(pipelinedMul: Boolean)(implicit val p: Parameters) extends DecodeC
    val M = if (pipelinedMul) Y else N
    val D = if (pipelinedMul) N else Y
    val table: Array[(BitPat, List[BitPat])] = Array(
@@ -671,7 +667,7 @@ index 04f83cd..3a4c777 100644
  }
  
  class M64Decode(pipelinedMul: Boolean)(implicit val p: Parameters) extends DecodeConstants
-@@ -212,161 +218,307 @@ class M64Decode(pipelinedMul: Boolean)(implicit val p: Parameters) extends Decod
+@@ -207,161 +213,307 @@ class M64Decode(pipelinedMul: Boolean)(implicit val p: Parameters) extends Decod
    val M = if (pipelinedMul) Y else N
    val D = if (pipelinedMul) N else Y
    val table: Array[(BitPat, List[BitPat])] = Array(
@@ -948,7 +944,7 @@ index 04f83cd..3a4c777 100644
 +    CUSTOM3_RD->        List(Y,N,Y,N,N,N,N,N,N,A2_ZERO,A1_RS1, IMM_X, DW_XPR,FN_ADD,   N,M_X,        N,N,N,N,N,N,Y,CSR.N,N,N,N,N,N,N,N),
 +    CUSTOM3_RD_RS1->    List(Y,N,Y,N,N,N,N,Y,N,A2_ZERO,A1_RS1, IMM_X, DW_XPR,FN_ADD,   N,M_X,        N,N,N,N,N,N,Y,CSR.N,N,N,N,N,N,N,N),
 +    CUSTOM3_RD_RS1_RS2->List(Y,N,Y,N,N,N,Y,Y,N,A2_ZERO,A1_RS1, IMM_X, DW_XPR,FN_ADD,   N,M_X,        N,N,N,N,N,N,Y,CSR.N,N,N,N,N,N,N,N))
-+}
+ }
 +
 +class VectorDecode(implicit val p :Parameters) extends DecodeConstants //ZFINX==false default
 +{
@@ -1094,12 +1090,13 @@ index 04f83cd..3a4c777 100644
 +    //amo insts
 +    VAMOW_V->       List(Y,N,N,N,N,N,N,Y,N,A2_X,   A1_X,   IMM_X, DW_X,  FN_X,     N,M_X,        N,N,N,N,N,N,N,CSR.N,N,N,N,N,Y,N,Y),
 +    VAMOE_V->       List(Y,N,N,N,N,N,N,Y,N,A2_X,   A1_X,   IMM_X, DW_X,  FN_X,     N,M_X,        N,N,N,N,N,N,N,CSR.N,N,N,N,N,Y,N,Y))
- }
++ }
+\ No newline at end of file
 diff --git a/src/main/scala/rocket/Instructions.scala b/src/main/scala/rocket/Instructions.scala
-index 905d219..6f74f5e 100644
+index f433fc067..46ec748d9 100644
 --- a/src/main/scala/rocket/Instructions.scala
 +++ b/src/main/scala/rocket/Instructions.scala
-@@ -317,6 +317,7 @@ object Instructions {
+@@ -281,6 +281,7 @@ object Instructions {
    def CUSTOM3_RD         = BitPat("b?????????????????100?????1111011")
    def CUSTOM3_RD_RS1     = BitPat("b?????????????????110?????1111011")
    def CUSTOM3_RD_RS1_RS2 = BitPat("b?????????????????111?????1111011")
@@ -1107,7 +1104,7 @@ index 905d219..6f74f5e 100644
    def VSETVLI            = BitPat("b0????????????????111?????1010111")
    def VSETVL             = BitPat("b1000000??????????111?????1010111")
    def VLB_V              = BitPat("b???100?00000?????000?????0000111")
-@@ -712,6 +713,144 @@ object Instructions {
+@@ -668,6 +669,144 @@ object Instructions {
    def VAMOMINUE_V        = BitPat("b11000????????????111?????0101111")
    def VAMOMAXUE_V        = BitPat("b11100????????????111?????0101111")
    def VMVNFR_V           = BitPat("b1001111??????????011?????1010111")
@@ -1253,10 +1250,10 @@ index 905d219..6f74f5e 100644
    def SRLI_RV32          = BitPat("b0000000??????????101?????0010011")
    def SRAI_RV32          = BitPat("b0100000??????????101?????0010011")
 diff --git a/src/main/scala/rocket/RocketCore.scala b/src/main/scala/rocket/RocketCore.scala
-index c6d86ce..2cd40f1 100644
+index de9a6d20d..800e3f6a3 100644
 --- a/src/main/scala/rocket/RocketCore.scala
 +++ b/src/main/scala/rocket/RocketCore.scala
-@@ -14,6 +14,7 @@ import freechips.rocketchip.util.property._
+@@ -13,6 +13,7 @@ import freechips.rocketchip.util.property._
  import freechips.rocketchip.scie._
  import scala.collection.immutable.ListMap
  import scala.collection.mutable.ArrayBuffer
@@ -1264,7 +1261,7 @@ index c6d86ce..2cd40f1 100644
  
  case class RocketCoreParams(
    bootFreqHz: BigInt = 0,
-@@ -44,10 +45,12 @@ case class RocketCoreParams(
+@@ -42,10 +43,12 @@ case class RocketCoreParams(
    mvendorid: Int = 0, // 0 means non-commercial implementation
    mimpid: Int = 0x20181004, // release date in BCD
    mulDiv: Option[MulDivParams] = Some(MulDivParams()),
@@ -1278,7 +1275,7 @@ index c6d86ce..2cd40f1 100644
    val pmpGranularity: Int = 4
    val fetchWidth: Int = if (useCompressed) 2 else 1
    //  fetchWidth doubled, but coreInstBytes halved, for RVC:
-@@ -170,6 +173,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -168,6 +171,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
      (if (usingAtomics) new ADecode +: (xLen > 32).option(new A64Decode).toSeq else Nil) ++:
      (if (fLen >= 32) new FDecode +: (xLen > 32).option(new F64Decode).toSeq else Nil) ++:
      (if (fLen >= 64) new DDecode +: (xLen > 32).option(new D64Decode).toSeq else Nil) ++:
@@ -1286,7 +1283,7 @@ index c6d86ce..2cd40f1 100644
      (usingRoCC.option(new RoCCDecode)) ++:
      (rocketParams.useSCIE.option(new SCIEDecode)) ++:
      (if (xLen == 32) new I32Decode else new I64Decode) +:
-@@ -291,6 +295,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -288,6 +292,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
      (id_ctrl.mul || id_ctrl.div) && !csr.io.status.isa('m'-'a') ||
      id_ctrl.amo && !csr.io.status.isa('a'-'a') ||
      id_ctrl.fp && (csr.io.decode(0).fp_illegal || io.fpu.illegal_rm) ||
@@ -1294,15 +1291,15 @@ index c6d86ce..2cd40f1 100644
      id_ctrl.dp && !csr.io.status.isa('d'-'a') ||
      ibuf.io.inst(0).bits.rvc && !csr.io.status.isa('c'-'a') ||
      id_raddr2_illegal && !id_ctrl.scie && id_ctrl.rxs2 ||
-@@ -324,6 +329,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -321,6 +326,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
    val id_xcpt1 = ibuf.io.inst(0).bits.xcpt1
    val (id_xcpt, id_cause) = checkExceptions(List(
      (csr.io.interrupt, csr.io.interrupt_cause),
-+    (io.vpu.vxcpt_imprecise, io.vpu.vcause), //VPU imprecise exception
++    (io.vpu.vxcpt_imprecise, io.vpu.vcause), //add for VPU, imprecise exception
      (bpu.io.debug_if,  UInt(CSR.debugTriggerCause)),
      (bpu.io.xcpt_if,   UInt(Causes.breakpoint)),
      (id_xcpt0.pf.inst, UInt(Causes.fetch_page_fault)),
-@@ -417,6 +423,10 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -414,6 +420,10 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
    ex_reg_xcpt := !ctrl_killd && id_xcpt
    ex_reg_xcpt_interrupt := !take_pc && ibuf.io.inst(0).valid && csr.io.interrupt
  
@@ -1313,7 +1310,7 @@ index c6d86ce..2cd40f1 100644
    when (!ctrl_killd) {
      ex_ctrl := id_ctrl
      ex_reg_rvc := ibuf.io.inst(0).bits.rvc
-@@ -439,6 +449,12 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -436,6 +446,12 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
          ex_ctrl.sel_alu1 := A1_PC
          ex_ctrl.sel_alu2 := A2_ZERO
        }
@@ -1326,7 +1323,7 @@ index c6d86ce..2cd40f1 100644
      }
      ex_reg_flush_pipe := id_ctrl.fence_i || id_csr_flush
      ex_reg_load_use := id_load_use
-@@ -468,6 +484,13 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -465,6 +481,13 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
        ex_reg_rs_lsb(0) := inst(log2Ceil(bypass_sources.size)-1, 0)
        ex_reg_rs_msb(0) := inst >> log2Ceil(bypass_sources.size)
      }
@@ -1340,7 +1337,7 @@ index c6d86ce..2cd40f1 100644
    }
    when (!ctrl_killd || csr.io.interrupt || ibuf.io.inst(0).bits.replay) {
      ex_reg_cause := id_cause
-@@ -575,7 +598,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -572,7 +595,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
  
    val dcache_kill_mem = mem_reg_valid && mem_ctrl.wxd && io.dmem.replay_next // structural hazard on writeback port
    val fpu_kill_mem = mem_reg_valid && mem_ctrl.fp && io.fpu.nack_mem
@@ -1350,7 +1347,7 @@ index c6d86ce..2cd40f1 100644
    val killm_common = dcache_kill_mem || take_pc_wb || mem_reg_xcpt || !mem_reg_valid
    div.io.kill := killm_common && Reg(next = div.io.req.fire())
    val ctrl_killm = killm_common || mem_xcpt || fpu_kill_mem
-@@ -589,7 +613,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -586,7 +610,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
      wb_ctrl := mem_ctrl
      wb_reg_sfence := mem_reg_sfence
      wb_reg_wdata := Mux(mem_scie_pipelined, mem_scie_pipelined_wdata,
@@ -1360,7 +1357,7 @@ index c6d86ce..2cd40f1 100644
      when (mem_ctrl.rocc || mem_reg_sfence) {
        wb_reg_rs2 := mem_reg_rs2
      }
-@@ -604,6 +629,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -601,6 +626,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
  
    val (wb_xcpt, wb_cause) = checkExceptions(List(
      (wb_reg_xcpt,  wb_reg_cause),
@@ -1368,7 +1365,7 @@ index c6d86ce..2cd40f1 100644
      (wb_reg_valid && wb_ctrl.mem && io.dmem.s2_xcpt.ma.st, UInt(Causes.misaligned_store)),
      (wb_reg_valid && wb_ctrl.mem && io.dmem.s2_xcpt.ma.ld, UInt(Causes.misaligned_load)),
      (wb_reg_valid && wb_ctrl.mem && io.dmem.s2_xcpt.pf.st, UInt(Causes.store_page_fault)),
-@@ -680,14 +706,27 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -677,14 +703,27 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
    csr.io.interrupts := io.interrupts
    csr.io.hartid := io.hartid
    io.fpu.fcsr_rm := csr.io.fcsr_rm
@@ -1398,7 +1395,7 @@ index c6d86ce..2cd40f1 100644
    io.ptw.ptbr := csr.io.ptbr
    (io.ptw.customCSRs.csrs zip csr.io.customCSRs).map { case (lhs, rhs) => lhs := rhs }
    io.ptw.status := csr.io.status
-@@ -707,7 +746,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -704,7 +743,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
    val fp_hazard_targets = Seq((io.fpu.dec.ren1, id_raddr1),
                                (io.fpu.dec.ren2, id_raddr2),
                                (io.fpu.dec.ren3, id_raddr3),
@@ -1408,7 +1405,7 @@ index c6d86ce..2cd40f1 100644
  
    val sboard = new Scoreboard(32, true)
    sboard.clear(ll_wen, ll_waddr)
-@@ -720,7 +760,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -717,7 +757,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
    sboard.set(wb_set_sboard && wb_wen, wb_waddr)
  
    // stall for RAW/WAW hazards on CSRs, loads, AMOs, and mul/div in execute stage.
@@ -1417,7 +1414,7 @@ index c6d86ce..2cd40f1 100644
    val data_hazard_ex = ex_ctrl.wxd && checkHazards(hazard_targets, _ === ex_waddr)
    val fp_data_hazard_ex = ex_ctrl.wfd && checkHazards(fp_hazard_targets, _ === ex_waddr)
    val id_ex_hazard = ex_reg_valid && (data_hazard_ex && ex_cannot_bypass || fp_data_hazard_ex)
-@@ -729,7 +769,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -726,7 +766,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
    val mem_mem_cmd_bh =
      if (fastLoadWord) Bool(!fastLoadByte) && mem_reg_slow_bypass
      else Bool(true)
@@ -1426,7 +1423,7 @@ index c6d86ce..2cd40f1 100644
    val data_hazard_mem = mem_ctrl.wxd && checkHazards(hazard_targets, _ === mem_waddr)
    val fp_data_hazard_mem = mem_ctrl.wfd && checkHazards(fp_hazard_targets, _ === mem_waddr)
    val id_mem_hazard = mem_reg_valid && (data_hazard_mem && mem_cannot_bypass || fp_data_hazard_mem)
-@@ -761,9 +801,14 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -758,9 +798,14 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
    val ctrl_stalld =
      id_ex_hazard || id_mem_hazard || id_wb_hazard || id_sboard_hazard ||
      csr.io.singleStep && (ex_reg_valid || mem_reg_valid || wb_reg_valid) ||
@@ -1444,7 +1441,7 @@ index c6d86ce..2cd40f1 100644
      id_ctrl.rocc && rocc_blocked || // reduce activity while RoCC is busy
      id_ctrl.div && (!(div.io.req.ready || (div.io.resp.valid && !wb_wxd)) || div.io.req.valid) || // reduce odds of replay
      !clock_en ||
-@@ -812,6 +857,17 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
+@@ -809,6 +854,17 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
    io.imem.bht_update.bits.branch := mem_ctrl.branch
    io.imem.bht_update.bits.prediction := mem_reg_btb_resp.bht
  
@@ -1463,7 +1460,7 @@ index c6d86ce..2cd40f1 100644
    io.fpu.killx := ctrl_killx
    io.fpu.killm := killm_common
 diff --git a/src/main/scala/subsystem/Configs.scala b/src/main/scala/subsystem/Configs.scala
-index eccd428..3d966a1 100644
+index 170282a00..bb2b57ff1 100644
 --- a/src/main/scala/subsystem/Configs.scala
 +++ b/src/main/scala/subsystem/Configs.scala
 @@ -12,6 +12,7 @@ import freechips.rocketchip.rocket._
@@ -1474,7 +1471,7 @@ index eccd428..3d966a1 100644
  
  class BaseSubsystemConfig extends Config ((site, here, up) => {
    // Tile parameters
-@@ -300,6 +301,62 @@ class WithFPUWithoutDivSqrt extends Config((site, here, up) => {
+@@ -271,6 +272,68 @@ class WithFPUWithoutDivSqrt extends Config((site, here, up) => {
    }
  })
  
@@ -1532,31 +1529,48 @@ index eccd428..3d966a1 100644
 +                ))
 +  ))}
 +})
++
++class WithoutVPU extends Config((site, here, up) => {
++  case RocketTilesKey => up(RocketTilesKey, site) map { r =>
++    r.copy(core = r.core.copy(vpu = None))
++  }
++})
 +//add for VPU
 +
  class WithBootROMFile(bootROMFile: String) extends Config((site, here, up) => {
    case BootROMParams => up(BootROMParams, site).copy(contentFileName = bootROMFile)
  })
 diff --git a/src/main/scala/system/Configs.scala b/src/main/scala/system/Configs.scala
-index b76507b..be41154 100644
+index 2c81ddba1..a11f6c68e 100644
 --- a/src/main/scala/system/Configs.scala
 +++ b/src/main/scala/system/Configs.scala
-@@ -74,5 +74,10 @@ class MMIOPortOnlyConfig extends Config(
+@@ -22,7 +22,7 @@ class BaseConfig extends Config(
+   new BaseSubsystemConfig()
+ )
+ 
+-class DefaultConfig extends Config(new WithNBigCores(1) ++ new BaseConfig)
++class DefaultConfig extends Config(new WithoutVPU ++ new WithNBigCores(1) ++ new BaseConfig) //add for VPU
+ 
+ class DefaultBufferlessConfig extends Config(new WithBufferlessBroadcastHub ++ new DefaultConfig)
+ class DefaultSmallConfig extends Config(new WithNSmallCores(1) ++ new BaseConfig)
+@@ -72,5 +72,12 @@ class MMIOPortOnlyConfig extends Config(
    new DefaultConfig
  )
  
 +//add for VPU
 +class VPUConfig extends Config(
-+  new WithVPU ++ new DefaultConfig)
++  new WithVPU ++
++  new WithNBigCores(1) ++
++  new BaseConfig)
 +//add for VPU
 +
  class BaseFPGAConfig extends Config(new BaseConfig)
  class DefaultFPGAConfig extends Config(new WithNSmallCores(1) ++ new BaseFPGAConfig)
 diff --git a/src/main/scala/tile/BaseTile.scala b/src/main/scala/tile/BaseTile.scala
-index cbfd93d..8553f44 100644
+index b6ba132c2..75cc0a220 100644
 --- a/src/main/scala/tile/BaseTile.scala
 +++ b/src/main/scala/tile/BaseTile.scala
-@@ -69,7 +69,8 @@ trait HasNonDiplomaticTileParameters {
+@@ -68,7 +68,8 @@ trait HasNonDiplomaticTileParameters {
  
    // TODO make HellaCacheIO diplomatic and remove this brittle collection of hacks
    //                  Core   PTW                DTIM                    coprocessors           
@@ -1566,7 +1580,7 @@ index cbfd93d..8553f44 100644
  
    // TODO merge with isaString in CSR.scala
    def isaDTS: String = {
-@@ -79,7 +80,8 @@ trait HasNonDiplomaticTileParameters {
+@@ -78,7 +79,8 @@ trait HasNonDiplomaticTileParameters {
      val f = if (tileParams.core.fpu.nonEmpty) "f" else ""
      val d = if (tileParams.core.fpu.nonEmpty && tileParams.core.fpu.get.fLen > 32) "d" else ""
      val c = if (tileParams.core.useCompressed) "c" else ""
@@ -1577,7 +1591,7 @@ index cbfd93d..8553f44 100644
    }
  
 diff --git a/src/main/scala/tile/Core.scala b/src/main/scala/tile/Core.scala
-index 118dc9a..67c15ed 100644
+index 63314dd4e..cbc28dee4 100644
 --- a/src/main/scala/tile/Core.scala
 +++ b/src/main/scala/tile/Core.scala
 @@ -7,6 +7,7 @@ import Chisel._
@@ -1588,7 +1602,7 @@ index 118dc9a..67c15ed 100644
  
  case object XLen extends Field[Int]
  
-@@ -25,6 +26,7 @@ trait CoreParams {
+@@ -24,6 +25,7 @@ trait CoreParams {
    val useRVE: Boolean
    val mulDiv: Option[MulDivParams]
    val fpu: Option[FPUParams]
@@ -1596,7 +1610,7 @@ index 118dc9a..67c15ed 100644
    val fetchWidth: Int
    val decodeWidth: Int
    val retireWidth: Int
-@@ -37,6 +39,7 @@ trait CoreParams {
+@@ -36,6 +38,7 @@ trait CoreParams {
    val nPerfCounters: Int
    val haveBasicCounters: Boolean
    val haveFSDirty: Boolean
@@ -1604,11 +1618,11 @@ index 118dc9a..67c15ed 100644
    val misaWritable: Boolean
    val haveCFlush: Boolean
    val nL2TLBEntries: Int
-@@ -64,8 +67,12 @@ trait HasCoreParameters extends HasTileParameters {
-   val minFLen = coreParams.fpu.map(_ => coreParams.minFLen).getOrElse(0)
+@@ -60,8 +63,12 @@ trait HasCoreParameters extends HasTileParameters {
+ 
    val fLen = coreParams.fpu.map(_.fLen).getOrElse(0)
  
-+  val VLEN  = coreParams.vpu.map(_.VLEN).getOrElse(0)      //add for VPU
++  val VLEN  = coreParams.vpu.map(_.VLEN).getOrElse(32)      //add for VPU
 +  val ZFINX = coreParams.vpu.map(_.ZFINX).getOrElse(false) //add for VPU
 +
    val usingMulDiv = coreParams.mulDiv.nonEmpty
@@ -1617,7 +1631,7 @@ index 118dc9a..67c15ed 100644
    val usingAtomics = coreParams.useAtomics
    val usingAtomicsOnlyForIO = coreParams.useAtomicsOnlyForIO
    val usingAtomicsInCache = usingAtomics && !usingAtomicsOnlyForIO
-@@ -127,6 +134,7 @@ trait HasCoreIO extends HasTileParameters {
+@@ -123,6 +130,7 @@ trait HasCoreIO extends HasTileParameters {
      val dmem = new HellaCacheIO
      val ptw = new DatapathPTWIO().flip
      val fpu = new FPUCoreIO().flip
@@ -1626,10 +1640,10 @@ index 118dc9a..67c15ed 100644
      val trace = Vec(coreParams.retireWidth, new TracedInstruction).asOutput
      val bpwatch = Vec(coreParams.nBreakpoints, new BPWatch(coreParams.retireWidth)).asOutput
 diff --git a/src/main/scala/tile/FPU.scala b/src/main/scala/tile/FPU.scala
-index a5110e7..d9f2915 100644
+index ee646cc8a..d6d1dd8a1 100644
 --- a/src/main/scala/tile/FPU.scala
 +++ b/src/main/scala/tile/FPU.scala
-@@ -142,6 +142,11 @@ class FPUCoreIO(implicit p: Parameters) extends CoreBundle()(p) {
+@@ -140,6 +140,11 @@ class FPUCoreIO(implicit p: Parameters) extends CoreBundle()(p) {
    val fcsr_rm = Bits(INPUT, FPConstants.RM_SZ)
    val fcsr_flags = Valid(Bits(width = FPConstants.FLAGS_SZ))
  
@@ -1641,7 +1655,7 @@ index a5110e7..d9f2915 100644
    val store_data = Bits(OUTPUT, fLen)
    val toint_data = Bits(OUTPUT, xLen)
  
-@@ -167,6 +172,7 @@ class FPUCoreIO(implicit p: Parameters) extends CoreBundle()(p) {
+@@ -165,6 +170,7 @@ class FPUCoreIO(implicit p: Parameters) extends CoreBundle()(p) {
  class FPUIO(implicit p: Parameters) extends FPUCoreIO ()(p) {
    val cp_req = Decoupled(new FPInput()).flip //cp doesn't pay attn to kill sigs
    val cp_resp = Decoupled(new FPResult())
@@ -1649,7 +1663,7 @@ index a5110e7..d9f2915 100644
  }
  
  class FPResult(implicit p: Parameters) extends CoreBundle()(p) {
-@@ -174,6 +180,13 @@ class FPResult(implicit p: Parameters) extends CoreBundle()(p) {
+@@ -172,6 +178,13 @@ class FPResult(implicit p: Parameters) extends CoreBundle()(p) {
    val exc = Bits(width = FPConstants.FLAGS_SZ)
  }
  
@@ -1663,7 +1677,7 @@ index a5110e7..d9f2915 100644
  class IntToFPInput(implicit p: Parameters) extends CoreBundle()(p) with HasFPUCtrlSigs {
    val rm = Bits(width = FPConstants.RM_SZ)
    val typ = Bits(width = 2)
-@@ -739,6 +752,9 @@ class FPU(cfg: FPUParams)(implicit p: Parameters) extends FPUModule()(p) {
+@@ -736,6 +749,9 @@ class FPU(cfg: FPUParams)(implicit p: Parameters) extends FPUModule()(p) {
    }
  
    val ex_rs = ex_ra.map(a => regfile(a))
@@ -1673,13 +1687,41 @@ index a5110e7..d9f2915 100644
    when (io.valid) {
      when (id_ctrl.ren1) {
        when (!id_ctrl.swap12) { ex_ra(0) := io.inst(19,15) }
+@@ -857,12 +873,27 @@ class FPU(cfg: FPUParams)(implicit p: Parameters) extends FPUModule()(p) {
+   val wdouble = Mux(divSqrt_wen, divSqrt_typeTag, !wbInfo(0).single)
+   val wdata = box(Mux(divSqrt_wen, divSqrt_wdata, (pipes.map(_.res.data): Seq[UInt])(wbInfo(0).pipeid)), wdouble)
+   val wexc = (pipes.map(_.res.exc): Seq[UInt])(wbInfo(0).pipeid)
++  //add for VPU
++  io.wrfr.ready := true.B
++  when(io.wrfr.fire()) {
++    regfile(io.wrfr.bits.rd) := io.wrfr.bits.wdata
++  }
++  when(load_wb) {
++  regfile(load_wb_tag) := load_wb_data
++  assert(consistent(wdata))
++  if (enableCommitLog)
++    printf("f%d p%d 0x%x\n", load_wb_tag, load_wb_tag + 32, load_wb_data)
++  io.wrfr.ready := false.B
++  }
++  //add for VPU
++
+   when ((!wbInfo(0).cp && wen(0)) || divSqrt_wen) {
+     assert(consistent(wdata))
+     regfile(waddr) := wdata
+     if (enableCommitLog) {
+       printf("f%d p%d 0x%x\n", waddr, waddr + 32, ieee(wdata))
+     }
++    io.wrfr.ready := false.B //add for VPU
+   }
+   when (wbInfo(0).cp && wen(0)) {
+     io.cp_resp.bits.data := wdata
 diff --git a/src/main/scala/tile/RocketTile.scala b/src/main/scala/tile/RocketTile.scala
-index 1a01e4a..9841ff9 100644
+index 05b5614ef..0d438c743 100644
 --- a/src/main/scala/tile/RocketTile.scala
 +++ b/src/main/scala/tile/RocketTile.scala
 @@ -13,6 +13,7 @@ import freechips.rocketchip.tilelink._
  import freechips.rocketchip.rocket._
- import freechips.rocketchip.subsystem.{SubsystemResetSchemeKey, ResetSynchronous, RocketCrossingParams}
+ import freechips.rocketchip.subsystem.RocketCrossingParams
  import freechips.rocketchip.util._
 +import freechips.rocketchip.vpu._ //add for VPU
  
@@ -1694,7 +1736,7 @@ index 1a01e4a..9841ff9 100644
  
    val dtimProperty = dtim_adapter.map(d => Map(
      "sifive,dtim" -> d.device.asProperty)).getOrElse(Nil)
-@@ -123,6 +124,7 @@ class RocketTile private(
+@@ -119,6 +120,7 @@ class RocketTile private(
  
  class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
      with HasFpuOpt
@@ -1702,7 +1744,7 @@ index 1a01e4a..9841ff9 100644
      with HasLazyRoCCModule
      with HasICacheFrontendModule {
    Annotated.params(this, outer.rocketParams)
-@@ -164,6 +166,20 @@ class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
+@@ -157,6 +159,20 @@ class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
    // Connect the core pipeline to other intra-tile modules
    outer.frontend.module.io.cpu <> core.io.imem
    dcachePorts += core.io.dmem // TODO outer.dcachePorts += () => module.core.io.dmem ??
@@ -1710,7 +1752,7 @@ index 1a01e4a..9841ff9 100644
 +  //add for VPU
 +  vpuOpt.map{ case vpu => { dcachePorts += vpu.io.dmem }}
 +  vpuOpt foreach { vpu => core.io.vpu <> vpu.io.core }
-+  vpuOpt.zip(fpuOpt) foreach { case (vpu, fpu) => 
++  vpuOpt.zip(fpuOpt) foreach { case (vpu, fpu) =>
 +    fpu.io.vpu_addr          := vpu.io.fpu.req.rs1
 +    vpu.io.fpu.req.fromFData := fpu.io.vpu_data
 +    fpu.io.wrfr.valid        := vpu.io.fpu.resp.valid
@@ -1723,7 +1765,7 @@ index 1a01e4a..9841ff9 100644
    fpuOpt foreach { fpu => core.io.fpu <> fpu.io }
    core.io.ptw <> ptw.io.dpath
  
-@@ -193,3 +209,9 @@ class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
+@@ -186,3 +202,9 @@ class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
  trait HasFpuOpt { this: RocketTileModuleImp =>
    val fpuOpt = outer.tileParams.core.fpu.map(params => Module(new FPU(params)(outer.p)))
  }
@@ -1733,9 +1775,10 @@ index 1a01e4a..9841ff9 100644
 +  val vpuOpt = outer.tileParams.core.vpu.map(params => Module(new VPUWrapper(params)(outer.p)))
 +//add for VPU
 +}
+\ No newline at end of file
 diff --git a/src/main/scala/vpuwrapper/VPUWrapper.scala b/src/main/scala/vpuwrapper/VPUWrapper.scala
 new file mode 100644
-index 0000000..4dee5b1
+index 000000000..b081250cc
 --- /dev/null
 +++ b/src/main/scala/vpuwrapper/VPUWrapper.scala
 @@ -0,0 +1,53 @@
@@ -1792,6 +1835,7 @@ index 0000000..4dee5b1
 +  vpu.io.respData       := io.dmem.resp.bits.data
 +  vpu.io.respS2Xcpt     := io.dmem.s2_xcpt
 +}
+\ No newline at end of file
 -- 
-2.7.4
+2.17.1
 
