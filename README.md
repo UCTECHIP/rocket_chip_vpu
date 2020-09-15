@@ -82,7 +82,7 @@ then make verilog
 ## compile VPU only (optional)
 
 VPU depends on [hardfloat][hf] repo.  
-To compile VPU, there are two ways to supply source files.
+To compile VPU, there are three ways to supply source files.
 
 * the first way is to copy all scala files to vpu/src/main/scala/hardfloat
 ```
@@ -94,6 +94,14 @@ To compile VPU, there are two ways to supply source files.
 
 * the second way is to depend on remote repo, which is writen in build.sbt
 ```
+  $ cd vpu
+  $ make verilog
+```
+
+* the last way is to place hardfloat repo in rocket_chip_vpu/vpu
+```
+  $ git clone https://github.com/ucb-bar/berkeley-hardfloat.git
+  $ sed -i '62,63s/^\/\///g' vpu/build.sbt
   $ cd vpu
   $ make verilog
 ```

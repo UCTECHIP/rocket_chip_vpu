@@ -59,10 +59,5 @@ scalacOptions ++= scalacOptionsVersion(scalaVersion.value)
 javacOptions ++= javacOptionsVersion(scalaVersion.value)
 
 
-lazy val hardfloat = (project in file("hardfloat"))
-lazy val vpu = (project in file(".")).dependsOn(hardfloat)
-
-
-
-
-
+//lazy val hardfloat = (project in file("hardfloat"))
+//lazy val vpu = (project in file(".")).dependsOn(hardfloat)
