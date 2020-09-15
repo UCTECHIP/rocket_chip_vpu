@@ -14,7 +14,7 @@ the repository contains VPU source code writen in Chisel, corresponding to rocke
   $ git submodule update --init --recursive
 ```
 
-### Set up rocket-chip environment(for Ubuntu)
+### Set up rocket-chip environment (for Ubuntu)
 #### Install riscv-gnu-toolchain
 
 checkout riscv-gnu-toolchain rvv-0.8.x branch
@@ -92,7 +92,7 @@ To compile VPU, there are two ways to supply source files.
   $ make verilog
 ```
 
-* the second way is to depend remote repo
+* the second way is to depend on remote repo, which is writen in build.sbt
 ```
   $ cd vpu
   $ make verilog
