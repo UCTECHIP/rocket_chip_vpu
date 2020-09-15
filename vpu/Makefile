@@ -20,4 +20,7 @@ verilog:
 repl:
 	$(SBT) 'test:runMain $(PROJECTPACKAGE).$(PROJECTREPL)'
 
-.PHONY: help main verilog repl
+clean:
+	rm -rf generated_verilog
+
+.PHONY: help main verilog repl clean
