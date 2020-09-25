@@ -1,4 +1,4 @@
-From c082597fa778343bdb2f8834abc9de835d9d270a Mon Sep 17 00:00:00 2001
+From 56a2f047a9ac33350f2726afa0f3b3f40e43616b Mon Sep 17 00:00:00 2001
 From: liangzhanhao <549830592@qq.com>
 Date: Mon, 14 Sep 2020 19:11:34 +0800
 Subject: [PATCH] feat: integrate VPU which is based on 0.8-release SPEC
@@ -13,10 +13,10 @@ Subject: [PATCH] feat: integrate VPU which is based on 0.8-release SPEC
  src/main/scala/system/Configs.scala        |   9 +-
  src/main/scala/tile/BaseTile.scala         |   6 +-
  src/main/scala/tile/Core.scala             |   8 +
- src/main/scala/tile/FPU.scala              |  31 ++
- src/main/scala/tile/RocketTile.scala       |  24 +-
+ src/main/scala/tile/FPU.scala              |  25 +
+ src/main/scala/tile/RocketTile.scala       |  23 +-
  src/main/scala/vpuwrapper/VPUWrapper.scala |  53 ++
- 12 files changed, 927 insertions(+), 295 deletions(-)
+ 12 files changed, 920 insertions(+), 295 deletions(-)
  create mode 100644 src/main/scala/vpuwrapper/VPUWrapper.scala
 
 diff --git a/build.sbt b/build.sbt
@@ -1640,7 +1640,7 @@ index 63314dd4e..cbc28dee4 100644
      val trace = Vec(coreParams.retireWidth, new TracedInstruction).asOutput
      val bpwatch = Vec(coreParams.nBreakpoints, new BPWatch(coreParams.retireWidth)).asOutput
 diff --git a/src/main/scala/tile/FPU.scala b/src/main/scala/tile/FPU.scala
-index ee646cc8a..d6d1dd8a1 100644
+index ee646cc8a..6821b1d2f 100644
 --- a/src/main/scala/tile/FPU.scala
 +++ b/src/main/scala/tile/FPU.scala
 @@ -140,6 +140,11 @@ class FPUCoreIO(implicit p: Parameters) extends CoreBundle()(p) {
@@ -1677,17 +1677,21 @@ index ee646cc8a..d6d1dd8a1 100644
  class IntToFPInput(implicit p: Parameters) extends CoreBundle()(p) with HasFPUCtrlSigs {
    val rm = Bits(width = FPConstants.RM_SZ)
    val typ = Bits(width = 2)
-@@ -736,6 +749,9 @@ class FPU(cfg: FPUParams)(implicit p: Parameters) extends FPUModule()(p) {
+@@ -733,9 +746,13 @@ class FPU(cfg: FPUParams)(implicit p: Parameters) extends FPUModule()(p) {
+     assert(consistent(wdata))
+     if (enableCommitLog)
+       printf("f%d p%d 0x%x\n", load_wb_tag, load_wb_tag + 32, load_wb_data)
++    io.wrfr.ready := false.B //add for VPU
    }
  
    val ex_rs = ex_ra.map(a => regfile(a))
 +
-+  io.vpu_data := regfile.read(io.vpu_addr) //add for VPU
++  io.vpu_data := regfile(io.vpu_addr) //add for VPU
 +
    when (io.valid) {
      when (id_ctrl.ren1) {
        when (!id_ctrl.swap12) { ex_ra(0) := io.inst(19,15) }
-@@ -857,12 +873,27 @@ class FPU(cfg: FPUParams)(implicit p: Parameters) extends FPUModule()(p) {
+@@ -857,12 +874,20 @@ class FPU(cfg: FPUParams)(implicit p: Parameters) extends FPUModule()(p) {
    val wdouble = Mux(divSqrt_wen, divSqrt_typeTag, !wbInfo(0).single)
    val wdata = box(Mux(divSqrt_wen, divSqrt_wdata, (pipes.map(_.res.data): Seq[UInt])(wbInfo(0).pipeid)), wdouble)
    val wexc = (pipes.map(_.res.exc): Seq[UInt])(wbInfo(0).pipeid)
@@ -1695,13 +1699,6 @@ index ee646cc8a..d6d1dd8a1 100644
 +  io.wrfr.ready := true.B
 +  when(io.wrfr.fire()) {
 +    regfile(io.wrfr.bits.rd) := io.wrfr.bits.wdata
-+  }
-+  when(load_wb) {
-+  regfile(load_wb_tag) := load_wb_data
-+  assert(consistent(wdata))
-+  if (enableCommitLog)
-+    printf("f%d p%d 0x%x\n", load_wb_tag, load_wb_tag + 32, load_wb_data)
-+  io.wrfr.ready := false.B
 +  }
 +  //add for VPU
 +
@@ -1716,7 +1713,7 @@ index ee646cc8a..d6d1dd8a1 100644
    when (wbInfo(0).cp && wen(0)) {
      io.cp_resp.bits.data := wdata
 diff --git a/src/main/scala/tile/RocketTile.scala b/src/main/scala/tile/RocketTile.scala
-index 05b5614ef..0d438c743 100644
+index 05b5614ef..588f1d93c 100644
 --- a/src/main/scala/tile/RocketTile.scala
 +++ b/src/main/scala/tile/RocketTile.scala
 @@ -13,6 +13,7 @@ import freechips.rocketchip.tilelink._
@@ -1744,11 +1741,12 @@ index 05b5614ef..0d438c743 100644
      with HasLazyRoCCModule
      with HasICacheFrontendModule {
    Annotated.params(this, outer.rocketParams)
-@@ -157,6 +159,20 @@ class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
+@@ -157,7 +159,20 @@ class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
    // Connect the core pipeline to other intra-tile modules
    outer.frontend.module.io.cpu <> core.io.imem
    dcachePorts += core.io.dmem // TODO outer.dcachePorts += () => module.core.io.dmem ??
 +
+   fpuOpt foreach { fpu => core.io.fpu <> fpu.io }
 +  //add for VPU
 +  vpuOpt.map{ case vpu => { dcachePorts += vpu.io.dmem }}
 +  vpuOpt foreach { vpu => core.io.vpu <> vpu.io.core }
@@ -1761,11 +1759,10 @@ index 05b5614ef..0d438c743 100644
 +    vpu.io.fpu.resp.ready    := fpu.io.wrfr.ready
 +  }
 +  //add for VPU
-+
-   fpuOpt foreach { fpu => core.io.fpu <> fpu.io }
    core.io.ptw <> ptw.io.dpath
  
-@@ -186,3 +202,9 @@ class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
+   // Connect the coprocessor interfaces
+@@ -186,3 +201,9 @@ class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
  trait HasFpuOpt { this: RocketTileModuleImp =>
    val fpuOpt = outer.tileParams.core.fpu.map(params => Module(new FPU(params)(outer.p)))
  }

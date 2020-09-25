@@ -30,14 +30,14 @@
 *       io.core.vcsr_vl              :       output[XLEN-1:0], data, value to write CSR vl
 *       io.core.vcsr_vtype           :       output[XLEN-1:0], data, value to write CSR vtype
 *
-*	io.core.ctrl_killx           :       input, control, kill the vector instruction executed at EXE stage
-*	io.core.ctrl_killm           :       input, control, kill the vector instruction executed at MEM stage
-*	io.core.ctrl_killw           :       input, control, kill the vector instruction executed at WB stage
-*	io.core.eret                 :       input, control, take the trap finish
-*	io.core.vxcpt_precise        :       output, control, precise exception signal generated at VPU, it connect to WB stage
+*       io.core.ctrl_killx           :       input, control, kill the vector instruction executed at EXE stage
+*     	io.core.ctrl_killm           :       input, control, kill the vector instruction executed at MEM stage
+*       io.core.ctrl_killw           :       input, control, kill the vector instruction executed at WB stage
+*       io.core.eret                 :       input, control, take the trap finish
+*       io.core.vxcpt_precise        :       output, control, precise exception signal generated at VPU, it connect to WB stage
 *       io.core.vxcpt_imprecise      :       output, control, imprecise exception signal generated at VPU, it connect to ID stage
 *       io.core.vxcpt_imprecise_resp :       input, control, inform VPU that exception has been received
-*	io.core.vcause               :       output[XLEN-1:0], data, exception cause
+*       io.core.vcause               :       output[XLEN-1:0], data, exception cause
 *       io.core.vmtval               :       output[XLEN-1:0], data, 
 *       io.core.vnack                :       output, control, imform Rocket that a vector inst has not been executed
 *       io.core.dcache_blocked       :       output, control, showing VPU is occupying DCache
@@ -50,22 +50,22 @@
 *       io.fpu.resp.bits.toFData     :       output[FLEN-1:0], data, result from VPU to FPU
 *       io.fpu.resp.bits.rd          :       output[4:0], data, address of writing result to floating-point registers
 *
-*       io.respValid                :       input, control, showing DCache response valid
-*       io.respTag                  :       input[6:0], control, return tag of request for in order receive
-*       io.respSize                 :       input[2:0], control, data width
-*       io.respHasData              :       input, control, showing response has data
-*       io.respData                 :       input[XLEN-1:0], data, response data
-*	io.respS2Xcpt               :       input HellaCacheExceptions, data, response exception information
+*       io.respValid                 :       input, control, showing DCache response valid
+*       io.respTag                   :       input[6:0], control, return tag of request for in order receive
+*       io.respSize                  :       input[2:0], control, data width
+*       io.respHasData               :       input, control, showing response has data
+*       io.respData                  :       input[XLEN-1:0], data, response data
+*       io.respS2Xcpt                :       input HellaCacheExceptions, data, response exception information
 *
-*       io.reqReady                 :       input, control, showing DCache is ready to receive a request
-*       io.s2Nack                   :       input, control, not-acknowledge request
-*       io.reqValid                 :       output, control, showing request valid
-*       io.reqAddr                  :       output[XLEN-1:0], control, address of memory data
-*       io.reqTag                   :       output[6:0], control, tag of request for in order receive
-*       io.reqCmd                   :       output[4:0], control, showing load or store action
-*       io.reqSize                  :       output[2:0], control, data width
-*       io.s1Data                   :       output[XLEN-1:0], data, data to store in memory
-*       io.s1Kill                   :       output, control, kill s1 stage of DCache
+*       io.reqReady                  :       input, control, showing DCache is ready to receive a request
+*       io.s2Nack                    :       input, control, not-acknowledge request
+*       io.reqValid                  :       output, control, showing request valid
+*       io.reqAddr                   :       output[XLEN-1:0], control, address of memory data
+*       io.reqTag                    :       output[6:0], control, tag of request for in order receive
+*       io.reqCmd                    :       output[4:0], control, showing load or store action
+*       io.reqSize                   :       output[2:0], control, data width
+*       io.s1Data                    :       output[XLEN-1:0], data, data to store in memory
+*       io.s1Kill                    :       output, control, kill s1 stage of DCache
 *
 ************************************************************/
 package vpu
