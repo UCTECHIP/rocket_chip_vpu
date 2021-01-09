@@ -21,7 +21,7 @@ checkout riscv-gnu-toolchain rvv-0.8.x branch
 ```
   $ git clone https://github.com/riscv/riscv-gnu-toolchain.git
   $ cd riscv-gnu-toolchain
-  $ git checkout -b rvv-0.8.x
+  $ git checkout rvv-0.8.x
   $ git submodule update --init --recursive
 ```
 
